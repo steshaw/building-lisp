@@ -1,7 +1,12 @@
+#include "lisp_config.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "lisp_config.h"
+#include <ctype.h>
+
+#include <readline/readline.h>
+#include <readline/history.h>
 
 typedef enum {
   AtomType_Nil,
@@ -96,6 +101,150 @@ void Atom_print(Atom atom) {
   }
 }
 
+typedef enum {
+  Result_OK = 0,
+  Result_Syntax_Error
+} Result;
+
+Result lex(const char str[], const char **start, const char **end) {
+  const char ws[] = " \t\n";
+  const char delim[] = "() \t\n";
+  const char prefix[] = "()";
+
+  str += strspn(str, ws);
+  if (str[0] == '\0') {
+    *start = *end = NULL;
+    return Result_Syntax_Error;
+  }
+
+  *start = str;
+  if (strchr(prefix, str[0]) != NULL) {
+    *end = str + 1; // Recognises a "(" or "("
+  } else {
+    *end = str + strcspn(str, delim); // Recognise "other" token.
+  }
+  return Result_OK;
+}
+
+int read_expr(const char *input, const char **end, Atom *result);
+
+int parse_simple(const char *start, const char *end, Atom *result) {
+  // Is it an integer?
+  char *p;
+  long val = strtol(start, &p, 10);
+  if (p == end) {
+    result->type = AtomType_Integer;
+    result->value.integer = val;
+    return Result_OK;
+  }
+
+  // NIL or symbol
+  char* buf = malloc(end - start + 1); // FIXME: NULL check.
+  p = buf;
+  while (start != end) {
+    *p++ = toupper(*start);
+    ++start;
+  }
+  *p = '\0';
+
+  if (strcmp(buf, "NIL") == 0)
+    *result = nil;
+  else
+    *result = make_sym(buf);
+
+  free(buf);
+
+  return Result_OK;
+}
+
+int read_list(const char *start, const char **end, Atom *result) {
+  Atom p;
+
+  *end = start;
+  p = *result = nil;
+
+  for (;;) {
+    const char *token;
+    Atom item;
+
+    Result r = lex(*end, &token, end);
+    if (r)
+      return r;
+
+    if (token[0] == ')')
+      return Result_OK;
+
+    if (token[0] == '.' && *end - token == 1) {
+      // Improper list.
+      if (nilp(p))
+        return Result_Syntax_Error;
+
+      r = read_expr(*end, end, &item);
+      if (r)
+        return r;
+
+      cdr(p) = item;
+
+      // Read the closing ')'.
+      r = lex(*end, &token, end);
+      if (!r && token[0] != ')')
+        r = Result_Syntax_Error;
+
+      return r;
+    }
+
+    r = read_expr(token, end, &item);
+    if (r)
+      return r;
+
+    if (nilp(p)) {
+      // First item.
+      *result = cons(item, nil);
+      p = *result;
+    } else {
+      cdr(p) = cons(item, nil);
+      p = cdr(p);
+    }
+  }
+}
+
+int read_expr(const char *input, const char **end, Atom *result) {
+  const char *token;
+  Result r = lex(input, &token, end);
+  if (r) return r;
+
+  if (token[0] == '(')
+    return read_list(*end, end, result);
+  else if (token[0] == ')')
+    return Result_Syntax_Error;
+  else
+    return parse_simple(token, *end, result);
+}
+
+void repl() {
+  char *input;
+  while ((input = readline("> ")) != NULL) {
+    if (strlen(input) != 0) {
+      add_history(input);
+
+      const char* p = input;
+      Atom expr;
+      Result r = read_expr(p, &p, &expr);
+
+      switch (r) {
+        case Result_OK:
+          Atom_print(expr);
+          putchar('\n');
+          break;
+        case Result_Syntax_Error:
+          puts("Syntax error");
+          break;
+      }
+    }
+    free(input);
+  }
+}
+
 int main(int argc, const char* argv[]) {
   printf(
     "lisp version %d.%d.%d\n",
@@ -123,4 +272,6 @@ int main(int argc, const char* argv[]) {
   printf("> sym_table\n");
   Atom_print(sym_table);
   putchar('\n');
+
+  repl();
 }

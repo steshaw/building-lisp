@@ -11,9 +11,15 @@ configure_file(
   "${PROJECT_SOURCE_DIR}/lisp_config.h"
 )
 
+add_executable(lisp lisp.c)
+
 # Add the binary dir so that we file the generated `lisp_config.h` file.
 include_directories("${PROJECT_BINARY_DIR}")
 
-add_executable(lisp lisp.c)
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
+
+find_package(Readline REQUIRED)
+include_directories("${READLINE_INCLUDE_DIR}")
+target_link_libraries(lisp ${READLINE_LIBRARY})
 
 install(TARGETS lisp DESTINATION bin)

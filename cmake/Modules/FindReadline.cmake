@@ -1,0 +1,12 @@
+find_path(READLINE_INCLUDE_DIR readline/readline.h)
+find_library(READLINE_LIBRARY NAMES readline)
+
+if(APPLE)
+  execute_process(COMMAND brew --prefix readline OUTPUT_VARIABLE READLINE_BREW_PREFIX)
+  if (READLINE_BREW_PREFIX)
+    string(STRIP ${READLINE_BREW_PREFIX} READLINE_BREW_PREFIX)
+    message(STATUS "Found a homebrew install of readline [[${READLINE_BREW_PREFIX}]]")
+    set(READLINE_INCLUDE_DIR ${READLINE_BREW_PREFIX}/include)
+    set(READLINE_LIBRARY ${READLINE_BREW_PREFIX}/lib/libreadline.dylib)
+  endif()
+endif()
