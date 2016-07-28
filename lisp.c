@@ -111,7 +111,10 @@ int make_closure(Atom env, Atom args, Atom body, Atom *result) {
   // Check argument names are all symbols.
   for (Atom p = args; !nilp(p); p = cdr(p)) {
     if (p.type == AtomType_Symbol) break; // Handle variadic arguments.
-    else if (p.type != AtomType_Pair || car(p).type != AtomType_Symbol) return Error_Type;
+    else if (p.type != AtomType_Pair || car(p).type != AtomType_Symbol) {
+      printf("Expected type pair or symbol in args");
+      return Error_Type;
+    }
   }
 
   *result = cons(env, cons(args, body));
@@ -176,7 +179,7 @@ void atom_print(Atom atom) {
 Result lex(const char str[], const char **start, const char **end) {
   const char ws[] = " \t\n";
   const char delim[] = "() \t\n";
-  const char prefix[] = "()'";
+  const char prefix[] = "()'`";
 
   str += strspn(str, ws);
   if (str[0] == '\0') {
@@ -185,8 +188,12 @@ Result lex(const char str[], const char **start, const char **end) {
   }
 
   *start = str;
+
   if (strchr(prefix, str[0]) != NULL) {
-    *end = str + 1; // Recognises a "(" or "("
+    *end = str + 1; // Recognises any single prefix char as a token.
+  } else if (str[0] == ',') {
+    // Regcognise both unquote "," and unquote-splicing ",@".
+    *end = str + (str[1] == '@'? 2 : 1);
   } else {
     *end = str + strcspn(str, delim); // Recognise "other" token.
   }
@@ -287,6 +294,17 @@ int read_expr(const char *input, const char **end, Atom *result) {
   else if (token[0] == '\'') {
     *result = cons(make_sym("QUOTE"), cons(nil, nil));
     return read_expr(*end, end, &car(cdr(*result))); // XXX: Hmm, clobber previous pair.
+  } else if (token[0] == '`') {
+    *result = cons(make_sym("QUASIQUOTE"), cons(nil, nil));
+    Result r = read_expr(*end, end, &car(cdr(*result))); // XXX: Hmm, clobber previous pair.
+    printf("quasiquoting..."); atom_print(*result); putchar('\n');
+    return r;
+  } else if (token[0] == ',') {
+    *result = cons(make_sym(token[1] == '@'? "UNQUOTE-SPLICING" : "UNQUOTE"),
+                   cons(nil, nil));
+    Result r = read_expr(*end, end, &car(cdr(*result))); // XXX: Hmm, clobber previous pair.
+    printf("unquoting..."); atom_print(*result); putchar('\n');
+    return r;
   } else
     return parse_simple(token, *end, result);
 }
@@ -323,6 +341,7 @@ int env_get(Atom env, Atom symbol, Atom *result) {
   // Try parent environment.
   if (!nilp(parent)) return env_get(parent, symbol, result);
 
+  printf("Symbol '%s' is not bound\n", symbol.value.symbol);
   return Error_Unbound;
 }
 
@@ -411,6 +430,7 @@ int apply(Atom f, Atom args, Atom *result) {
 
     return Result_OK;
   }
+  printf("Expecting type builtin or closure in apply");
   return Error_Type;
 }
 
@@ -427,14 +447,27 @@ int apply(Atom f, Atom args, Atom *result) {
   if (nilp(args) || nilp(cdr(args)) || nilp(cdr(cdr(args))) || !nilp(cdr(cdr(cdr(args))))) \
     return Error_Args
 
+int apply_builtin(Atom args, Atom *result) {
+  ENSURE_2_ARGS();
+
+  Atom fn = car(args);
+  args = car(cdr(args));
+
+  if (!listp(args)) return Error_Syntax;
+
+  return apply(fn, args, result);
+}
+
 int car_builtin(Atom args, Atom *result) {
   ENSURE_1_ARG();
 
   Atom arg = car(args);
 
-  if (nilp(arg)) *result = nil;
-  else if (arg.type != AtomType_Pair) return Error_Type;
-  else *result = car(arg);
+  if (nilp(arg) || arg.type != AtomType_Pair) *result = nil;
+  else if (arg.type != AtomType_Pair) {
+    printf("Expecting a pair in car\n");
+    return Error_Type;
+  } else *result = car(arg);
   return Result_OK;
 }
 
@@ -443,9 +476,11 @@ int cdr_builtin(Atom args, Atom *result) {
 
   Atom arg = car(args);
 
-  if (nilp(arg)) *result = nil;
-  else if (arg.type != AtomType_Pair) return Error_Type;
-  else *result = cdr(arg);
+  if (nilp(arg) || arg.type != AtomType_Pair) *result = nil;
+  else if (arg.type != AtomType_Pair) {
+    printf("Expecting a pair in cdr\n");
+    return Error_Type;
+  } else *result = cdr(arg);
   return Result_OK;
 }
 
@@ -460,6 +495,54 @@ int cons_builtin(Atom args, Atom *result) {
   return Result_OK;
 }
 
+Atom boolToTF(bool b) {
+    return b ? TRUE_SYM : nil;
+}
+
+int pairp_builtin(Atom args, Atom *result) {
+  ENSURE_1_ARG();
+
+  Atom p = car(args);
+
+  *result = boolToTF(p.type == AtomType_Pair);
+
+  return Result_OK;
+}
+
+int eqp_builtin(Atom args, Atom *result) {
+  ENSURE_2_ARGS();
+
+  Atom a1 = car(args);
+  Atom a2 = car(cdr(args));
+
+  if (a1.type != a2.type) {
+    *result = boolToTF(false);
+    return Result_OK;
+  } else {
+    switch (a1.type) {
+      case AtomType_Nil:
+        *result = boolToTF(true);
+        break;
+      case AtomType_Pair:
+      case AtomType_Closure:
+      case AtomType_Macro:
+        *result = boolToTF(a1.value.pair == a2.value.pair);
+        break;
+      case AtomType_Symbol:
+        *result = boolToTF(a1.value.symbol == a2.value.symbol);
+        break;
+      case AtomType_Integer:
+        *result = boolToTF(a1.value.integer == a2.value.integer);
+        break;
+      case AtomType_Builtin:
+        *result = boolToTF(a1.value.builtin == a2.value.builtin);
+        break;
+    }
+  }
+
+  return Result_OK;
+}
+
 #define INTEGER_BINOP(FN_NAME, BINOP) \
   int FN_NAME(Atom args, Atom *result) { \
     ENSURE_2_ARGS(); \
@@ -467,7 +550,10 @@ int cons_builtin(Atom args, Atom *result) {
     Atom i1 = car(args); \
     Atom i2 = car(cdr(args)); \
 \
-    if (i1.type != AtomType_Integer || i2.type != AtomType_Integer) return Error_Type; \
+    if (i1.type != AtomType_Integer || i2.type != AtomType_Integer) { \
+      printf("Expecting two integers in binop\n"); \
+      return Error_Type; \
+    } \
 \
     *result = make_int(i1.value.integer BINOP i2.value.integer); \
 \
@@ -486,9 +572,12 @@ INTEGER_BINOP(div_builtin, /)
     Atom i1 = car(args); \
     Atom i2 = car(cdr(args)); \
 \
-    if (i1.type != AtomType_Integer || i2.type != AtomType_Integer) return Error_Type; \
+    if (i1.type != AtomType_Integer || i2.type != AtomType_Integer) { \
+      printf("Expecting two integers in relop\n"); \
+      return Error_Type; \
+    } \
 \
-    *result = i1.value.integer BINOP i2.value.integer ? TRUE_SYM : nil; \
+    *result = boolToTF(i1.value.integer BINOP i2.value.integer); \
 \
     return Result_OK; \
   }
@@ -549,10 +638,14 @@ Result eval_expr(Atom expr, Atom env, Atom *result) {
       } else if (first.type == AtomType_Pair) {
         // (DEFINE (name args...) body...)
         sym = car(first);
-        if (sym.type != AtomType_Symbol) return Error_Type;
+        if (sym.type != AtomType_Symbol) {
+          printf("Expecting symbol in (DEFINE (name args...) body...)\n");
+          return Error_Type;
+        }
         Result r = make_closure(env, cdr(first), cdr(args), &val);
         if (r) return r;
       } else {
+          printf("Expecting symbol or pair in (DEFINE ...)\n");
         return Error_Type;
       }
 
@@ -576,7 +669,10 @@ Result eval_expr(Atom expr, Atom env, Atom *result) {
       if (nilp(args) || nilp(cdr(args))) return Error_Args;
       if (car(args).type != AtomType_Pair) return Error_Syntax;
       Atom sym = car(car(args));
-      if (sym.type != AtomType_Symbol) return Error_Type;
+      if (sym.type != AtomType_Symbol) {
+        printf("Expecting symbol in DEFMACRO\n");
+        return Error_Type;
+      }
       Atom macro;
       Result r = make_closure(env, cdr(car(args)), cdr(args), &macro);
       if (r) return r;
@@ -770,9 +866,14 @@ void load_file(Atom env, const char path[]) {
 
 Atom initial_env() {
   Atom env = env_create(nil);
+  env_set(env, make_sym("APPLY"), make_builtin(apply_builtin));
+
   env_set(env, make_sym("CAR"), make_builtin(car_builtin));
   env_set(env, make_sym("CDR"), make_builtin(cdr_builtin));
   env_set(env, make_sym("CONS"), make_builtin(cons_builtin));
+  env_set(env, make_sym("PAIR?"), make_builtin(pairp_builtin));
+  env_set(env, make_sym("EQ?"), make_builtin(eqp_builtin));
+
   env_set(env, make_sym("UNIT-TEST-1"), make_builtin(unit_test_1_builtin));
 
   env_set(env, make_sym("+"), make_builtin(add_builtin));
