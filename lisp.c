@@ -105,11 +105,12 @@ bool listp(Atom a) {
 }
 
 int make_closure(Atom env, Atom args, Atom body, Atom *result) {
-  if (!listp(args) || (!listp(body))) return Error_Syntax;
+  if ((!listp(body))) return Error_Syntax;
 
   // Check argument names are all symbols.
   for (Atom p = args; !nilp(p); p = cdr(p)) {
-    if (car(p).type != AtomType_Symbol) return Error_Type;
+    if (p.type == AtomType_Symbol) break; // Handle variadic arguments.
+    else if (p.type != AtomType_Pair || car(p).type != AtomType_Symbol) return Error_Type;
   }
 
   *result = cons(env, cons(args, body));
@@ -376,10 +377,18 @@ int apply(Atom f, Atom args, Atom *result) {
 
     // Bind the arguments in the new environment.
     while (!nilp(arg_names)) {
-      if (nilp(args)) return Error_Args;
-      env_set(env, car(arg_names), car(args));
-      arg_names = cdr(arg_names);
-      args = cdr(args);
+      if (arg_names.type == AtomType_Symbol) {
+        // Process in improper list which gets the rest of the args.
+        Atom sym = arg_names;
+        env_set(env, sym, args);
+        args = nil; // Don't trip up below on "Too many args".
+        break;
+      } else {
+        if (nilp(args)) return Error_Args;
+        env_set(env, car(arg_names), car(args));
+        arg_names = cdr(arg_names);
+        args = cdr(args);
+      }
     }
 
     if (!nilp(args)) return Error_Args; // Too many args.
