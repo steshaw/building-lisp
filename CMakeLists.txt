@@ -6,6 +6,8 @@ set (LISP_VERSION_MAJOR 0)
 set (LISP_VERSION_MINOR 1)
 set (LISP_VERSION_PATCH 0)
 
+set (CMAKE_BUILD_TYPE Debug)
+
 configure_file(
   "${PROJECT_SOURCE_DIR}/lisp_config.h.in"
   "${PROJECT_SOURCE_DIR}/lisp_config.h"
