@@ -335,8 +335,11 @@ int apply(Atom f, Atom args, Atom *result) {
   return Error_Type;
 }
 
+#define ENSURE_1_ARG() if (nilp(args) || !nilp(cdr(args))) return Error_Args
+#define ENSURE_2_ARGS() if (nilp(args) || nilp(cdr(args)) || !nilp(cdr(cdr(args)))) return Error_Args
+
 int builtin_car(Atom args, Atom *result) {
-  if (nilp(args) || !nilp(cdr(args))) return Error_Args;
+  ENSURE_1_ARG();
 
   Atom arg = car(args);
 
@@ -347,7 +350,7 @@ int builtin_car(Atom args, Atom *result) {
 }
 
 int builtin_cdr(Atom args, Atom *result) {
-  if (nilp(args) || !nilp(cdr(args))) return Error_Args;
+  ENSURE_1_ARG();
 
   Atom arg = car(args);
 
@@ -358,7 +361,7 @@ int builtin_cdr(Atom args, Atom *result) {
 }
 
 int builtin_cons(Atom args, Atom *result) {
-  if (nilp(args) || nilp(cdr(args)) || !nilp(cdr(cdr(args)))) return Error_Args;
+  ENSURE_2_ARGS();
 
   Atom a1 = car(args);
   Atom a2 = car(cdr(args));
@@ -367,6 +370,25 @@ int builtin_cons(Atom args, Atom *result) {
 
   return Result_OK;
 }
+
+#define INTEGER_BINOP(FN_NAME, BINOP) \
+  int FN_NAME(Atom args, Atom *result) { \
+    ENSURE_2_ARGS(); \
+\
+    Atom i1 = car(args); \
+    Atom i2 = car(cdr(args)); \
+\
+    if (i1.type != AtomType_Integer || i2.type != AtomType_Integer) return Error_Type; \
+\
+    *result = make_int(i1.value.integer BINOP i2.value.integer); \
+\
+    return Result_OK; \
+  }
+
+INTEGER_BINOP(builtin_add, +)
+INTEGER_BINOP(builtin_sub, -)
+INTEGER_BINOP(builtin_mul, *)
+INTEGER_BINOP(builtin_div, /)
 
 // -----------------------------------------------------------------------------
 // Evaluation
@@ -432,7 +454,7 @@ Result eval_expr(Atom expr, Atom env, Atom *result) {
   if (r) return r;
 
   // Evaluate arguments.
-  args = copy_list(args); // Shallow copy because we clobber the args with the 
+  args = copy_list(args); // Shallow copy because we clobber the args with the
                           // evaluated args.
   for (Atom p = args; !nilp(p); p = cdr(p)) {
     r = eval_expr(car(p), env, &car(p));
@@ -503,6 +525,10 @@ int main(int argc, const char* argv[]) {
   env_set(env, make_sym("CAR"), make_builtin(builtin_car));
   env_set(env, make_sym("CDR"), make_builtin(builtin_cdr));
   env_set(env, make_sym("CONS"), make_builtin(builtin_cons));
+  env_set(env, make_sym("+"), make_builtin(builtin_add));
+  env_set(env, make_sym("-"), make_builtin(builtin_sub));
+  env_set(env, make_sym("*"), make_builtin(builtin_mul));
+  env_set(env, make_sym("/"), make_builtin(builtin_div));
 
   printf("> make_int(42)\n");
   atom_print(make_int(42));
