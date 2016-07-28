@@ -390,13 +390,16 @@ int apply(Atom f, Atom args, Atom *result) {
   return Error_Type;
 }
 
+#define ENSURE_0_ARGS() \
+  if (!nilp(args)) return Error_Args
+
 #define ENSURE_1_ARG() \
   if (nilp(args) || !nilp(cdr(args))) return Error_Args
 
 #define ENSURE_2_ARGS() \
   if (nilp(args) || nilp(cdr(args)) || !nilp(cdr(cdr(args)))) return Error_Args
 
-int builtin_car(Atom args, Atom *result) {
+int car_builtin(Atom args, Atom *result) {
   ENSURE_1_ARG();
 
   Atom arg = car(args);
@@ -407,7 +410,7 @@ int builtin_car(Atom args, Atom *result) {
   return Result_OK;
 }
 
-int builtin_cdr(Atom args, Atom *result) {
+int cdr_builtin(Atom args, Atom *result) {
   ENSURE_1_ARG();
 
   Atom arg = car(args);
@@ -418,7 +421,7 @@ int builtin_cdr(Atom args, Atom *result) {
   return Result_OK;
 }
 
-int builtin_cons(Atom args, Atom *result) {
+int cons_builtin(Atom args, Atom *result) {
   ENSURE_2_ARGS();
 
   Atom a1 = car(args);
@@ -443,10 +446,10 @@ int builtin_cons(Atom args, Atom *result) {
     return Result_OK; \
   }
 
-INTEGER_BINOP(builtin_add, +)
-INTEGER_BINOP(builtin_sub, -)
-INTEGER_BINOP(builtin_mul, *)
-INTEGER_BINOP(builtin_div, /)
+INTEGER_BINOP(add_builtin, +)
+INTEGER_BINOP(sub_builtin, -)
+INTEGER_BINOP(mul_builtin, *)
+INTEGER_BINOP(div_builtin, /)
 
 // -----------------------------------------------------------------------------
 // Evaluation
@@ -562,26 +565,10 @@ void repl(Atom env) {
 }
 
 // -----------------------------------------------------------------------------
-// main
+// old unit test, now a builtin function
 // -----------------------------------------------------------------------------
-int main(int argc, const char* argv[]) {
-  printf(
-    "lisp version %d.%d.%d\n",
-    LISP_VERSION_MAJOR,
-    LISP_VERSION_MINOR,
-    LISP_VERSION_PATCH
-  );
 
-  // Initial environment.
-  Atom env = env_create(nil);
-  env_set(env, make_sym("CAR"), make_builtin(builtin_car));
-  env_set(env, make_sym("CDR"), make_builtin(builtin_cdr));
-  env_set(env, make_sym("CONS"), make_builtin(builtin_cons));
-  env_set(env, make_sym("+"), make_builtin(builtin_add));
-  env_set(env, make_sym("-"), make_builtin(builtin_sub));
-  env_set(env, make_sym("*"), make_builtin(builtin_mul));
-  env_set(env, make_sym("/"), make_builtin(builtin_div));
-
+void unit_test_1() {
   printf("> make_int(42)\n");
   atom_print(make_int(42));
   putchar('\n');
@@ -601,6 +588,38 @@ int main(int argc, const char* argv[]) {
   printf("> sym_table\n");
   atom_print(sym_table);
   putchar('\n');
+}
+
+int unit_test_1_builtin(Atom args, Atom *result) {
+  ENSURE_0_ARGS();
+
+  unit_test_1();
+
+  *result = make_sym("T");
+  return Result_OK;
+}
+
+// -----------------------------------------------------------------------------
+// main
+// -----------------------------------------------------------------------------
+int main(int argc, const char* argv[]) {
+  printf(
+    "lisp version %d.%d.%d\n",
+    LISP_VERSION_MAJOR,
+    LISP_VERSION_MINOR,
+    LISP_VERSION_PATCH
+  );
+
+  // Initial environment.
+  Atom env = env_create(nil);
+  env_set(env, make_sym("CAR"), make_builtin(car_builtin));
+  env_set(env, make_sym("CDR"), make_builtin(cdr_builtin));
+  env_set(env, make_sym("CONS"), make_builtin(cons_builtin));
+  env_set(env, make_sym("UNIT-TEST-1"), make_builtin(unit_test_1_builtin));
+  env_set(env, make_sym("+"), make_builtin(add_builtin));
+  env_set(env, make_sym("-"), make_builtin(sub_builtin));
+  env_set(env, make_sym("*"), make_builtin(mul_builtin));
+  env_set(env, make_sym("/"), make_builtin(div_builtin));
 
   repl(env);
 }
