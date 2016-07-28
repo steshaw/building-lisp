@@ -48,6 +48,8 @@ struct Pair {
 
 static const Atom nil = { AtomType_Nil };
 
+#define TRUE_SYM make_sym("T")
+
 Atom cons(Atom car, Atom cdr) {
   Atom p;
   p.type = AtomType_Pair;
@@ -455,6 +457,26 @@ INTEGER_BINOP(sub_builtin, -)
 INTEGER_BINOP(mul_builtin, *)
 INTEGER_BINOP(div_builtin, /)
 
+#define INTEGER_RELOP(FN_NAME, BINOP) \
+  int FN_NAME(Atom args, Atom *result) { \
+    ENSURE_2_ARGS(); \
+\
+    Atom i1 = car(args); \
+    Atom i2 = car(cdr(args)); \
+\
+    if (i1.type != AtomType_Integer || i2.type != AtomType_Integer) return Error_Type; \
+\
+    *result = i1.value.integer BINOP i2.value.integer ? TRUE_SYM : nil; \
+\
+    return Result_OK; \
+  }
+
+INTEGER_RELOP(integer_eq_builtin, ==)
+INTEGER_RELOP(integer_lt_builtin, <)
+INTEGER_RELOP(integer_le_builtin, <=)
+INTEGER_RELOP(integer_gt_builtin, >)
+INTEGER_RELOP(integer_ge_builtin, >=)
+
 // -----------------------------------------------------------------------------
 // Evaluation
 // -----------------------------------------------------------------------------
@@ -605,8 +627,6 @@ void unit_test_1() {
   putchar('\n');
 }
 
-#define TRUE_SYM make_sym("T")
-
 int unit_test_1_builtin(Atom args, Atom *result) {
   ENSURE_0_ARGS();
 
@@ -633,10 +653,18 @@ int main(int argc, const char* argv[]) {
   env_set(env, make_sym("CDR"), make_builtin(cdr_builtin));
   env_set(env, make_sym("CONS"), make_builtin(cons_builtin));
   env_set(env, make_sym("UNIT-TEST-1"), make_builtin(unit_test_1_builtin));
+
   env_set(env, make_sym("+"), make_builtin(add_builtin));
   env_set(env, make_sym("-"), make_builtin(sub_builtin));
   env_set(env, make_sym("*"), make_builtin(mul_builtin));
   env_set(env, make_sym("/"), make_builtin(div_builtin));
+
+  env_set(env, make_sym("="), make_builtin(integer_eq_builtin));
+  env_set(env, make_sym("<"), make_builtin(integer_lt_builtin));
+  env_set(env, make_sym("<="), make_builtin(integer_le_builtin));
+  env_set(env, make_sym(">"), make_builtin(integer_gt_builtin));
+  env_set(env, make_sym(">="), make_builtin(integer_ge_builtin));
+
   env_set(env, TRUE_SYM, TRUE_SYM);
 
   repl(env);
