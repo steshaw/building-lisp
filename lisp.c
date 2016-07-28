@@ -482,16 +482,13 @@ INTEGER_RELOP(integer_ge_builtin, >=)
 
 // -----------------------------------------------------------------------------
 // Evaluation
-// -----------------------------------------------------------------------------
-
-// -----------------------------------------------------------------------------
-// Evaluation rules:
 //   - a literal evaluates to itself.
 //   - a symbol is looked up in the environment. It's an error if no binding exists.
 //   - a list expression of one of the following is a _special form_:
 //     - (QUOTE expr) => evaluates to expr (which is returned without evaluating).
 //     - (DEFINE sym expr) => creates a binding for `sym` in the evaluation environment.
 //                            The final result is `sym`.
+//     - (DEFINE (name args...) body...) => (DEFINE name (LAMBDA (args...) body...)
 //     - (LAMBDA args body...)
 //     - (IF cond when_true when_false)
 // -----------------------------------------------------------------------------
@@ -517,15 +514,27 @@ Result eval_expr(Atom expr, Atom env, Atom *result) {
       *result = car(args);
       return Result_OK;
     } else if (strcmp(op.value.symbol, "DEFINE") == 0) {
-      if (nilp(args) || nilp(cdr(args)) || !nilp(cdr(cdr(args))))
-        return Error_Args;
+      if (nilp(args) || nilp(cdr(args))) return Error_Args; // At least two args.
 
-      Atom sym = car(args);
-      if (sym.type != AtomType_Symbol) return Error_Type;
-
+      Atom sym;
       Atom val;
-      Result err = eval_expr(car(cdr(args)), env, &val);
-      if (err) return err;
+      Atom first = car(args);
+      if (first.type == AtomType_Symbol) {
+        // (DEFINE sym expr)
+        ENSURE_2_ARGS();
+        sym = first;
+        Atom expr = car(cdr(args));
+        Result r = eval_expr(expr, env, &val);
+        if (r) return r;
+      } else if (first.type == AtomType_Pair) {
+        // (DEFINE (name args...) body...)
+        sym = car(first);
+        if (sym.type != AtomType_Symbol) return Error_Type;
+        Result r = make_closure(env, cdr(first), cdr(args), &val);
+        if (r) return r;
+      } else {
+        return Error_Type;
+      }
 
       *result = sym;
       return env_set(env, sym, val);
