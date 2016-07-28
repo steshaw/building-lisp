@@ -297,13 +297,11 @@ int read_expr(const char *input, const char **end, Atom *result) {
   } else if (token[0] == '`') {
     *result = cons(make_sym("QUASIQUOTE"), cons(nil, nil));
     Result r = read_expr(*end, end, &car(cdr(*result))); // XXX: Hmm, clobber previous pair.
-    printf("quasiquoting..."); atom_print(*result); putchar('\n');
     return r;
   } else if (token[0] == ',') {
     *result = cons(make_sym(token[1] == '@'? "UNQUOTE-SPLICING" : "UNQUOTE"),
                    cons(nil, nil));
     Result r = read_expr(*end, end, &car(cdr(*result))); // XXX: Hmm, clobber previous pair.
-    printf("unquoting..."); atom_print(*result); putchar('\n');
     return r;
   } else
     return parse_simple(token, *end, result);
