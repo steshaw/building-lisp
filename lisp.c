@@ -644,15 +644,18 @@ char *symbol_generator(const char* text, int state) {
   return NULL;
 }
 
+static char history_file[] = ".lisp_history";
+
 void repl(Atom env) {
   using_history();
-  read_history(".lisp_history");
+  read_history(history_file);
   generator_env = env;
   rl_completion_entry_function = symbol_generator;
   char *input;
   while ((input = readline("λ> ")) != NULL) {
     if (strlen(input) != 0) {
       add_history(input);
+      write_history(history_file);
 
       if (strcmp(input, ":q") == 0) {
         puts("bye");
@@ -688,7 +691,6 @@ void repl(Atom env) {
     }
     free(input);
   }
-  write_history(".lisp_history");
 }
 
 // -----------------------------------------------------------------------------
