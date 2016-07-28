@@ -399,6 +399,10 @@ int apply(Atom f, Atom args, Atom *result) {
 #define ENSURE_2_ARGS() \
   if (nilp(args) || nilp(cdr(args)) || !nilp(cdr(cdr(args)))) return Error_Args
 
+#define ENSURE_3_ARGS() \
+  if (nilp(args) || nilp(cdr(args)) || nilp(cdr(cdr(args))) || !nilp(cdr(cdr(cdr(args))))) \
+    return Error_Args
+
 int car_builtin(Atom args, Atom *result) {
   ENSURE_1_ARG();
 
@@ -501,6 +505,17 @@ Result eval_expr(Atom expr, Atom env, Atom *result) {
     } else if (strcmp(op.value.symbol, "LAMBDA") == 0) {
       if (nilp(args) || nilp(cdr(args))) return Error_Args;
       return make_closure(env, car(args), cdr(args), result);
+    } else if (strcmp(op.value.symbol, "IF") == 0) {
+      ENSURE_3_ARGS();
+
+      Atom cond = car(args);
+      Atom when_t = car(cdr(args));
+      Atom when_f = car(cdr(cdr(args)));
+
+      Result r = eval_expr(cond, env, &cond);
+      if (r) return r;
+      Atom e = nilp(cond) ? when_f : when_t; // NIL is falsy, all other values of truthy.
+      return eval_expr(e, env, result);
     }
   }
 
@@ -590,12 +605,14 @@ void unit_test_1() {
   putchar('\n');
 }
 
+#define TRUE_SYM make_sym("T")
+
 int unit_test_1_builtin(Atom args, Atom *result) {
   ENSURE_0_ARGS();
 
   unit_test_1();
 
-  *result = make_sym("T");
+  *result = TRUE_SYM;
   return Result_OK;
 }
 
@@ -620,6 +637,7 @@ int main(int argc, const char* argv[]) {
   env_set(env, make_sym("-"), make_builtin(sub_builtin));
   env_set(env, make_sym("*"), make_builtin(mul_builtin));
   env_set(env, make_sym("/"), make_builtin(div_builtin));
+  env_set(env, TRUE_SYM, TRUE_SYM);
 
   repl(env);
 }
