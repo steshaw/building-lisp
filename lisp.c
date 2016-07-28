@@ -19,7 +19,8 @@ typedef enum {
   AtomType_Pair,
   AtomType_Symbol,
   AtomType_Integer,
-  AtomType_Builtin
+  AtomType_Builtin,
+  AtomType_Closure
 } AtomType;
 
 typedef struct Pair Pair;
@@ -65,6 +66,14 @@ Atom make_int(long i) {
 
 static Atom sym_table = { AtomType_Nil };
 
+typedef enum {
+  Result_OK = 0,
+  Error_Syntax,
+  Error_Unbound,
+  Error_Args,
+  Error_Type
+} Result;
+
 Atom make_sym(const char s[]) {
   // Return symbol if it's already in the `sym_table`.
   Atom p = sym_table;
@@ -81,6 +90,29 @@ Atom make_sym(const char s[]) {
   sym_table = cons(a, sym_table);
 
   return a;
+}
+
+// Tests if the atom is a proper list.
+bool listp(Atom a) {
+   while (!nilp(a)) {
+     if (a.type != AtomType_Pair) return false;
+     a = cdr(a);
+   }
+   return true;
+}
+
+int make_closure(Atom env, Atom args, Atom body, Atom *result) {
+  if (!listp(args) || (!listp(body))) return Error_Syntax;
+
+  // Check argument names are all symbols.
+  for (Atom p = args; !nilp(p); p = cdr(p)) {
+    if (car(p).type != AtomType_Symbol) return Error_Type;
+  }
+
+  *result = cons(env, cons(args, body));
+  result->type = AtomType_Closure; // Clobber AtomType_Pair with AtomType_Closure.
+
+  return Result_OK;
 }
 
 // -----------------------------------------------------------------------------
@@ -115,20 +147,18 @@ void atom_print(Atom atom) {
     case AtomType_Builtin:
       printf("#<BUILTIN:%p>", atom.value.builtin);
       break;
+    case AtomType_Closure:
+      printf("#<CLOSURE>\n");
+      Atom as_list = atom;
+      as_list.type = AtomType_Pair;
+      atom_print(as_list);
+      break;
   }
 }
 
 // -----------------------------------------------------------------------------
 // Parser
 // -----------------------------------------------------------------------------
-
-typedef enum {
-  Result_OK = 0,
-  Error_Syntax,
-  Error_Unbound,
-  Error_Args,
-  Error_Type
-} Result;
 
 Result lex(const char str[], const char **start, const char **end) {
   const char ws[] = " \t\n";
@@ -328,15 +358,43 @@ Atom copy_list(Atom list) {
   return a;
 }
 
+Result eval_expr(Atom expr, Atom env, Atom *result);
+
 int apply(Atom f, Atom args, Atom *result) {
   if (f.type == AtomType_Builtin) {
     return (*f.value.builtin)(args, result);
+  } else if (f.type == AtomType_Closure) {
+    Atom env = env_create(car(f));
+    Atom arg_names = car(cdr(f));
+    Atom body = cdr(cdr(f));
+
+    // Bind the arguments in the new environment.
+    while (!nilp(arg_names)) {
+      if (nilp(args)) return Error_Args;
+      env_set(env, car(arg_names), car(args));
+      arg_names = cdr(arg_names);
+      args = cdr(args);
+    }
+
+    if (!nilp(args)) return Error_Args; // Too many args.
+
+    // Evaluate the body (body is a sequence of expressions).
+    while (!nilp(body)) {
+      Result r = eval_expr(car(body), env, result);
+      if (r) return r;
+      body = cdr(body);
+    }
+
+    return Result_OK;
   }
   return Error_Type;
 }
 
-#define ENSURE_1_ARG() if (nilp(args) || !nilp(cdr(args))) return Error_Args
-#define ENSURE_2_ARGS() if (nilp(args) || nilp(cdr(args)) || !nilp(cdr(cdr(args)))) return Error_Args
+#define ENSURE_1_ARG() \
+  if (nilp(args) || !nilp(cdr(args))) return Error_Args
+
+#define ENSURE_2_ARGS() \
+  if (nilp(args) || nilp(cdr(args)) || !nilp(cdr(cdr(args)))) return Error_Args
 
 int builtin_car(Atom args, Atom *result) {
   ENSURE_1_ARG();
@@ -394,15 +452,6 @@ INTEGER_BINOP(builtin_div, /)
 // Evaluation
 // -----------------------------------------------------------------------------
 
-// Tests if the atom is a proper list.
-bool listp(Atom a) {
-   while (!nilp(a)) {
-     if (a.type != AtomType_Pair) return false;
-     a = cdr(a);
-   }
-   return true;
-}
-
 // -----------------------------------------------------------------------------
 // Evaluation rules:
 //   - a literal evaluates to itself.
@@ -446,6 +495,9 @@ Result eval_expr(Atom expr, Atom env, Atom *result) {
 
       *result = sym;
       return env_set(env, sym, val);
+    } else if (strcmp(op.value.symbol, "LAMBDA") == 0) {
+      if (nilp(args) || nilp(cdr(args))) return Error_Args;
+      return make_closure(env, car(args), cdr(args), result);
     }
   }
 
