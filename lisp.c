@@ -8,6 +8,10 @@
 #include <readline/readline.h>
 #include <readline/history.h>
 
+// -----------------------------------------------------------------------------
+// Atoms
+// -----------------------------------------------------------------------------
+
 typedef enum {
   AtomType_Nil,
   AtomType_Pair,
@@ -72,6 +76,9 @@ Atom make_sym(const char s[]) {
   return a;
 }
 
+// -----------------------------------------------------------------------------
+// Atom_print
+// -----------------------------------------------------------------------------
 void Atom_print(Atom atom) {
   switch (atom.type) {
     case AtomType_Nil: printf("NIL"); break;
@@ -100,6 +107,10 @@ void Atom_print(Atom atom) {
       break;
   }
 }
+
+// -----------------------------------------------------------------------------
+// Parser
+// -----------------------------------------------------------------------------
 
 typedef enum {
   Result_OK = 0,
@@ -221,11 +232,19 @@ int read_expr(const char *input, const char **end, Atom *result) {
     return parse_simple(token, *end, result);
 }
 
+// -----------------------------------------------------------------------------
+// REPL
+// -----------------------------------------------------------------------------
 void repl() {
   char *input;
-  while ((input = readline("> ")) != NULL) {
+  while ((input = readline("λ> ")) != NULL) {
     if (strlen(input) != 0) {
       add_history(input);
+
+      if (strcmp(input, ":q") == 0) {
+        puts("bye");
+        break; // XXX: `input` is probably not freed on exit.
+      }
 
       const char* p = input;
       Atom expr;
@@ -245,6 +264,9 @@ void repl() {
   }
 }
 
+// -----------------------------------------------------------------------------
+// main
+// -----------------------------------------------------------------------------
 int main(int argc, const char* argv[]) {
   printf(
     "lisp version %d.%d.%d\n",
