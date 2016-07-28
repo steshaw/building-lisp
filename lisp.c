@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <ctype.h>
 #include <stdbool.h>
 #include <assert.h>
@@ -573,7 +574,40 @@ Result eval_expr(Atom expr, Atom env, Atom *result) {
 // -----------------------------------------------------------------------------
 // REPL
 // -----------------------------------------------------------------------------
+
+static Atom generator_env;
+
+// GNU readline function for tab completion.
+// Looks for symbols in the current environment.
+char *symbol_generator(const char* text, int state) {
+  static Atom parent;
+  static Atom bindings; // Note the statics.
+  static int len;
+  if (state == 0) {
+    parent = car(generator_env);
+    bindings = cdr(generator_env);
+    len = strlen(text);
+  }
+
+  // Find `text` in the bindings.
+  while (!nilp(bindings)) {
+    Atom binding = car(bindings);
+    Atom sym = car(binding);
+    const char *name = sym.value.symbol;
+    if (strncasecmp(name, text, len) == 0) {
+      bindings = cdr(bindings);
+      return strdup(name);
+    }
+    bindings = cdr(bindings);
+  }
+  return NULL;
+}
+
 void repl(Atom env) {
+  using_history();
+  read_history(".lisp_history");
+  generator_env = env;
+  rl_completion_entry_function = symbol_generator;
   char *input;
   while ((input = readline("λ> ")) != NULL) {
     if (strlen(input) != 0) {
@@ -613,6 +647,7 @@ void repl(Atom env) {
     }
     free(input);
   }
+  write_history(".lisp_history");
 }
 
 // -----------------------------------------------------------------------------
