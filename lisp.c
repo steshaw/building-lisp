@@ -366,7 +366,8 @@ void repl() {
 
       if (strcmp(input, ":q") == 0) {
         puts("bye");
-        break; // XXX: `input` is probably not freed on exit.
+        free(input);
+        break;
       }
 
       const char* p = input;
