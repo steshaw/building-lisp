@@ -165,7 +165,7 @@ void atom_print(Atom atom) {
 Result lex(const char str[], const char **start, const char **end) {
   const char ws[] = " \t\n";
   const char delim[] = "() \t\n";
-  const char prefix[] = "()";
+  const char prefix[] = "()'";
 
   str += strspn(str, ws);
   if (str[0] == '\0') {
@@ -273,7 +273,10 @@ int read_expr(const char *input, const char **end, Atom *result) {
     return read_list(*end, end, result);
   else if (token[0] == ')')
     return Error_Syntax;
-  else
+  else if (token[0] == '\'') {
+    *result = cons(make_sym("QUOTE"), cons(nil, nil));
+    return read_expr(*end, end, &car(cdr(*result))); // XXX: Hmm, clobber previous pair.
+  } else
     return parse_simple(token, *end, result);
 }
 
@@ -489,6 +492,8 @@ INTEGER_RELOP(integer_ge_builtin, >=)
 //     - (QUOTE expr) => evaluates to expr (which is returned without evaluating).
 //     - (DEFINE sym expr) => creates a binding for `sym` in the evaluation environment.
 //                            The final result is `sym`.
+//     - (LAMBDA args body...)
+//     - (IF cond when_true when_false)
 // -----------------------------------------------------------------------------
 Result eval_expr(Atom expr, Atom env, Atom *result) {
   if (expr.type == AtomType_Symbol) {
