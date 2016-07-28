@@ -18,19 +18,24 @@ typedef enum {
   AtomType_Nil,
   AtomType_Pair,
   AtomType_Symbol,
-  AtomType_Integer
+  AtomType_Integer,
+  AtomType_Builtin
 } AtomType;
 
 typedef struct Pair Pair;
+typedef struct Atom Atom;
 
-typedef struct {
+typedef int (*Builtin)(Atom args, Atom *result);
+
+struct Atom {
   AtomType type;
   union {
     Pair *pair;
     const char* symbol;
     long integer;
+    Builtin builtin;
   } value;
-} Atom;
+};
 
 struct Pair {
   Atom atom[2];
@@ -106,6 +111,9 @@ void atom_print(Atom atom) {
       break;
     case AtomType_Integer:
       printf("%ld", atom.value.integer);
+      break;
+    case AtomType_Builtin:
+      printf("#<BUILTIN:%p>", atom.value.builtin);
       break;
   }
 }
@@ -293,6 +301,74 @@ int env_set(Atom env, Atom symbol, Atom value) {
 }
 
 // -----------------------------------------------------------------------------
+// builtin functions
+// -----------------------------------------------------------------------------
+
+Atom make_builtin(Builtin f) {
+  Atom a;
+  a.type = AtomType_Builtin;
+  a.value.builtin = f;
+  return a;
+}
+
+// Create a _shallow_ copy of the argument list.
+Atom copy_list(Atom list) {
+  if (nilp(list)) return nil;
+
+  Atom a = cons(car(list), nil);
+  Atom p = a;
+  list = cdr(list);
+
+  while (!nilp(list)) {
+    cdr(p) = cons(car(list), nil);
+    p = cdr(p);
+    list = cdr(list);
+  }
+
+  return a;
+}
+
+int apply(Atom f, Atom args, Atom *result) {
+  if (f.type == AtomType_Builtin) {
+    return (*f.value.builtin)(args, result);
+  }
+  return Error_Type;
+}
+
+int builtin_car(Atom args, Atom *result) {
+  if (nilp(args) || !nilp(cdr(args))) return Error_Args;
+
+  Atom arg = car(args);
+
+  if (nilp(arg)) *result = nil;
+  else if (arg.type != AtomType_Pair) return Error_Type;
+  else *result = car(arg);
+  return Result_OK;
+}
+
+int builtin_cdr(Atom args, Atom *result) {
+  if (nilp(args) || !nilp(cdr(args))) return Error_Args;
+
+  Atom arg = car(args);
+
+  if (nilp(arg)) *result = nil;
+  else if (arg.type != AtomType_Pair) return Error_Type;
+  else *result = cdr(arg);
+  return Result_OK;
+}
+
+int builtin_cons(Atom args, Atom *result) {
+  if (nilp(args) || nilp(cdr(args)) || !nilp(cdr(cdr(args)))) return Error_Args;
+
+  Atom a1 = car(args);
+  Atom a2 = car(cdr(args));
+
+  *result = cons(a1, a2);
+
+  return Result_OK;
+}
+
+// -----------------------------------------------------------------------------
 // Evaluation
 // -----------------------------------------------------------------------------
 
@@ -351,14 +427,25 @@ Result eval_expr(Atom expr, Atom env, Atom *result) {
     }
   }
 
-  return Error_Syntax;
+  // Evaluate the operator.
+  Result r = eval_expr(op, env, &op);
+  if (r) return r;
+
+  // Evaluate arguments.
+  args = copy_list(args); // Shallow copy because we clobber the args with the 
+                          // evaluated args.
+  for (Atom p = args; !nilp(p); p = cdr(p)) {
+    r = eval_expr(car(p), env, &car(p));
+    if (r) return r;
+  }
+
+  return apply(op, args, result);
 }
 
 // -----------------------------------------------------------------------------
 // REPL
 // -----------------------------------------------------------------------------
-void repl() {
-  Atom env = env_create(nil);
+void repl(Atom env) {
   char *input;
   while ((input = readline("λ> ")) != NULL) {
     if (strlen(input) != 0) {
@@ -410,7 +497,12 @@ int main(int argc, const char* argv[]) {
     LISP_VERSION_MINOR,
     LISP_VERSION_PATCH
   );
-  puts("bye");
+
+  // Initial environment.
+  Atom env = env_create(nil);
+  env_set(env, make_sym("CAR"), make_builtin(builtin_car));
+  env_set(env, make_sym("CDR"), make_builtin(builtin_cdr));
+  env_set(env, make_sym("CONS"), make_builtin(builtin_cons));
 
   printf("> make_int(42)\n");
   atom_print(make_int(42));
@@ -432,5 +524,5 @@ int main(int argc, const char* argv[]) {
   atom_print(sym_table);
   putchar('\n');
 
-  repl();
+  repl(env);
 }
