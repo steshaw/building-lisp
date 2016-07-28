@@ -727,17 +727,46 @@ int unit_test_1_builtin(Atom args, Atom *result) {
 }
 
 // -----------------------------------------------------------------------------
-// main
+// library
 // -----------------------------------------------------------------------------
-int main(int argc, const char* argv[]) {
-  printf(
-    "lisp version %d.%d.%d\n",
-    LISP_VERSION_MAJOR,
-    LISP_VERSION_MINOR,
-    LISP_VERSION_PATCH
-  );
+char* slurp(const char path[]) {
+  FILE * file = fopen(path, "r");
+  if (!file) return NULL;
+  fseek(file, 0, SEEK_END);
+  long len = ftell(file);
+  fseek(file, 0, SEEK_SET);
 
-  // Initial environment.
+  char * buf = malloc(len); // XXX: +1?
+  if (buf == NULL) return NULL;
+
+  fread(buf, 1, len, file);
+  fclose(file);
+
+  return buf;
+}
+
+void load_file(Atom env, const char path[]) {
+  printf("Loading '%s' ...\n", path);
+  char *text = slurp(path);
+  if (text) {
+    const char *p = text;
+    Atom expr;
+    while (read_expr(p, &p, &expr) == Result_OK) {
+      Atom result;
+      Result r = eval_expr(expr, env, &result);
+      if (r) {
+        printf("Error in expression:\n\t");
+        atom_print(expr);
+        putchar('\n');
+      } else {
+        atom_print(result);
+        putchar('\n');
+      }
+    }
+  }
+}
+
+Atom initial_env() {
   Atom env = env_create(nil);
   env_set(env, make_sym("CAR"), make_builtin(car_builtin));
   env_set(env, make_sym("CDR"), make_builtin(cdr_builtin));
@@ -757,5 +786,21 @@ int main(int argc, const char* argv[]) {
 
   env_set(env, TRUE_SYM, TRUE_SYM);
 
+  return env;
+}
+
+// -----------------------------------------------------------------------------
+// main
+// -----------------------------------------------------------------------------
+int main(int argc, const char* argv[]) {
+  printf(
+    "lisp version %d.%d.%d\n",
+    LISP_VERSION_MAJOR,
+    LISP_VERSION_MINOR,
+    LISP_VERSION_PATCH
+  );
+
+  Atom env = initial_env();
+  load_file(env, "library.lisp");
   repl(env);
 }
