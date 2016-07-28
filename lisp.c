@@ -21,7 +21,8 @@ typedef enum {
   AtomType_Symbol,
   AtomType_Integer,
   AtomType_Builtin,
-  AtomType_Closure
+  AtomType_Closure,
+  AtomType_Macro
 } AtomType;
 
 typedef struct Pair Pair;
@@ -151,12 +152,20 @@ void atom_print(Atom atom) {
     case AtomType_Builtin:
       printf("#<BUILTIN:%p>", atom.value.builtin);
       break;
-    case AtomType_Closure:
+    case AtomType_Closure: {
       printf("#<CLOSURE>\n");
       Atom as_list = atom;
       as_list.type = AtomType_Pair;
       atom_print(as_list);
       break;
+    }
+    case AtomType_Macro: {
+      printf("#<MACRO>\n");
+      Atom as_list = atom;
+      as_list.type = AtomType_Pair;
+      atom_print(as_list);
+      break;
+    }
   }
 }
 
@@ -501,6 +510,7 @@ INTEGER_RELOP(integer_ge_builtin, >=)
 //     - (DEFINE (name args...) body...) => (DEFINE name (LAMBDA (args...) body...)
 //     - (LAMBDA args body...)
 //     - (IF cond when_true when_false)
+//     - (DEFMACRO (name arg...) body...)
 // -----------------------------------------------------------------------------
 Result eval_expr(Atom expr, Atom env, Atom *result) {
   if (expr.type == AtomType_Symbol) {
@@ -562,6 +572,17 @@ Result eval_expr(Atom expr, Atom env, Atom *result) {
       if (r) return r;
       Atom e = nilp(cond) ? when_f : when_t; // NIL is falsy, all other values of truthy.
       return eval_expr(e, env, result);
+    } else if (strcmp(op.value.symbol, "DEFMACRO") == 0) {
+      if (nilp(args) || nilp(cdr(args))) return Error_Args;
+      if (car(args).type != AtomType_Pair) return Error_Syntax;
+      Atom sym = car(car(args));
+      if (sym.type != AtomType_Symbol) return Error_Type;
+      Atom macro;
+      Result r = make_closure(env, cdr(car(args)), cdr(args), &macro);
+      if (r) return r;
+      macro.type = AtomType_Macro; // Clobber AtomType_Closure.
+      *result = sym;
+      return env_set(env, sym, macro);
     }
   }
 
@@ -569,15 +590,26 @@ Result eval_expr(Atom expr, Atom env, Atom *result) {
   Result r = eval_expr(op, env, &op);
   if (r) return r;
 
-  // Evaluate arguments.
-  args = copy_list(args); // Shallow copy because we clobber the args with the
-                          // evaluated args.
-  for (Atom p = args; !nilp(p); p = cdr(p)) {
-    r = eval_expr(car(p), env, &car(p));
+  // Is it a macro?
+  if (op.type == AtomType_Macro) {
+    op.type = AtomType_Closure; // Sneakily turn the macro into a closure again.
+    Atom expansion;
+    Result r = apply(op, args, &expansion);
     if (r) return r;
-  }
+    return eval_expr(expansion, env, result);
+  } else {
+    // It must be a function application.
 
-  return apply(op, args, result);
+    // Evaluate arguments.
+    args = copy_list(args); // Shallow copy because we clobber the args with the
+                            // evaluated args.
+    for (Atom p = args; !nilp(p); p = cdr(p)) {
+      r = eval_expr(car(p), env, &car(p));
+      if (r) return r;
+    }
+
+    return apply(op, args, result);
+  }
 }
 
 // -----------------------------------------------------------------------------
