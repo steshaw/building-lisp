@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdbool.h>
+#include <assert.h>
 
 #include <readline/readline.h>
 #include <readline/history.h>
@@ -77,23 +79,23 @@ Atom make_sym(const char s[]) {
 }
 
 // -----------------------------------------------------------------------------
-// Atom_print
+// atom_print
 // -----------------------------------------------------------------------------
-void Atom_print(Atom atom) {
+void atom_print(Atom atom) {
   switch (atom.type) {
     case AtomType_Nil: printf("NIL"); break;
     case AtomType_Pair:
       putchar('(');
-      Atom_print(car(atom));
+      atom_print(car(atom));
       atom = cdr(atom);
       while (!nilp(atom)) {
         if (atom.type == AtomType_Pair) {
           putchar(' ');
-          Atom_print(car(atom));
+          atom_print(car(atom));
           atom = cdr(atom);
         } else {
           printf(" . ");
-          Atom_print(atom);
+          atom_print(atom);
           break;
         }
       }
@@ -114,7 +116,10 @@ void Atom_print(Atom atom) {
 
 typedef enum {
   Result_OK = 0,
-  Result_Syntax_Error
+  Error_Syntax,
+  Error_Unbound,
+  Error_Args,
+  Error_Type
 } Result;
 
 Result lex(const char str[], const char **start, const char **end) {
@@ -125,7 +130,7 @@ Result lex(const char str[], const char **start, const char **end) {
   str += strspn(str, ws);
   if (str[0] == '\0') {
     *start = *end = NULL;
-    return Result_Syntax_Error;
+    return Error_Syntax;
   }
 
   *start = str;
@@ -188,7 +193,7 @@ int read_list(const char *start, const char **end, Atom *result) {
     if (token[0] == '.' && *end - token == 1) {
       // Improper list.
       if (nilp(p))
-        return Result_Syntax_Error;
+        return Error_Syntax;
 
       r = read_expr(*end, end, &item);
       if (r)
@@ -199,7 +204,7 @@ int read_list(const char *start, const char **end, Atom *result) {
       // Read the closing ')'.
       r = lex(*end, &token, end);
       if (!r && token[0] != ')')
-        r = Result_Syntax_Error;
+        r = Error_Syntax;
 
       return r;
     }
@@ -227,15 +232,133 @@ int read_expr(const char *input, const char **end, Atom *result) {
   if (token[0] == '(')
     return read_list(*end, end, result);
   else if (token[0] == ')')
-    return Result_Syntax_Error;
+    return Error_Syntax;
   else
     return parse_simple(token, *end, result);
+}
+
+// -----------------------------------------------------------------------------
+// environments
+// -----------------------------------------------------------------------------
+
+bool sym_eq(Atom sym1, Atom sym2) {
+  assert(sym1.type == AtomType_Symbol);
+  assert(sym2.type == AtomType_Symbol);
+
+  return sym1.value.symbol == sym2.value.symbol;
+}
+
+Atom env_create(Atom parent) {
+  return cons(parent, nil);
+}
+
+int env_get(Atom env, Atom symbol, Atom *result) {
+  Atom parent = car(env);
+  Atom bs = cdr(env);
+
+  // Find in this environment's bindings (`bs`).
+  while (!nilp(bs)) {
+    Atom binding = car(bs);
+    if (sym_eq(car(binding), symbol)) {
+      *result = cdr(binding);
+      return Result_OK;
+    }
+    bs = cdr(bs);
+  }
+
+  // Try parent environment.
+  if (!nilp(parent)) return env_get(parent, symbol, result);
+
+  return Error_Unbound;
+}
+
+int env_set(Atom env, Atom symbol, Atom value) {
+  Atom bs = cdr(env);
+  Atom binding = nil;
+
+  while (!nilp(bs)) {
+    binding = car(bs);
+    if (sym_eq(car(binding), symbol)) {
+      cdr(binding) = value;
+      return Result_OK;
+    }
+    bs = cdr(bs);
+  }
+
+  // Binding not found -- create a new one.
+  binding = cons(symbol, value);
+  cdr(env) = cons(binding, cdr(env));
+
+  return Result_OK;
+}
+
+// -----------------------------------------------------------------------------
+// Evaluation
+// -----------------------------------------------------------------------------
+
+// Tests if the atom is a proper list.
+bool listp(Atom a) {
+   while (!nilp(a)) {
+     if (a.type != AtomType_Pair) return false;
+     a = cdr(a);
+   }
+   return true;
+}
+
+// -----------------------------------------------------------------------------
+// Evaluation rules:
+//   - a literal evaluates to itself.
+//   - a symbol is looked up in the environment. It's an error if no binding exists.
+//   - a list expression of one of the following is a _special form_:
+//     - (QUOTE expr) => evaluates to expr (which is returned without evaluating).
+//     - (DEFINE sym expr) => creates a binding for `sym` in the evaluation environment.
+//                            The final result is `sym`.
+// -----------------------------------------------------------------------------
+Result eval_expr(Atom expr, Atom env, Atom *result) {
+  if (expr.type == AtomType_Symbol) {
+    return env_get(env, expr, result);
+  } else if (expr.type != AtomType_Pair) {
+    *result = expr;
+    return Result_OK;
+  }
+
+  if (!listp(expr))
+    return Error_Syntax;
+
+  Atom op = car(expr);
+  Atom args = cdr(expr);
+
+  if (op.type == AtomType_Symbol) {
+    if (strcmp(op.value.symbol, "QUOTE") == 0) {
+      if (nilp(args) || !nilp(cdr(args)))
+        return Error_Args;
+
+      *result = car(args);
+      return Result_OK;
+    } else if (strcmp(op.value.symbol, "DEFINE") == 0) {
+      if (nilp(args) || nilp(cdr(args)) || !nilp(cdr(cdr(args))))
+        return Error_Args;
+
+      Atom sym = car(args);
+      if (sym.type != AtomType_Symbol) return Error_Type;
+
+      Atom val;
+      Result err = eval_expr(car(cdr(args)), env, &val);
+      if (err) return err;
+
+      *result = sym;
+      return env_set(env, sym, val);
+    }
+  }
+
+  return Error_Syntax;
 }
 
 // -----------------------------------------------------------------------------
 // REPL
 // -----------------------------------------------------------------------------
 void repl() {
+  Atom env = env_create(nil);
   char *input;
   while ((input = readline("λ> ")) != NULL) {
     if (strlen(input) != 0) {
@@ -250,13 +373,25 @@ void repl() {
       Atom expr;
       Result r = read_expr(p, &p, &expr);
 
+      Atom result;
+      if (!r) r = eval_expr(expr, env, &result);
+
       switch (r) {
         case Result_OK:
-          Atom_print(expr);
+          atom_print(result);
           putchar('\n');
           break;
-        case Result_Syntax_Error:
+        case Error_Syntax:
           puts("Syntax error");
+          break;
+        case Error_Unbound:
+          puts("Symbol not bound");
+          break;
+        case Error_Args:
+          puts("Wrong number of arguments");
+          break;
+        case Error_Type:
+          puts("Wrong type");
           break;
       }
     }
@@ -274,25 +409,26 @@ int main(int argc, const char* argv[]) {
     LISP_VERSION_MINOR,
     LISP_VERSION_PATCH
   );
+  puts("bye");
 
   printf("> make_int(42)\n");
-  Atom_print(make_int(42));
+  atom_print(make_int(42));
   putchar('\n');
 
   printf("> make_sym(\"FOO\")\n");
-  Atom_print(make_sym("FOO"));
+  atom_print(make_sym("FOO"));
   putchar('\n');
 
   printf("> cons(make_sym(\"X\"), make_sym(\"Y\"))\n");
-  Atom_print(cons(make_sym("X"), make_sym("Y")));
+  atom_print(cons(make_sym("X"), make_sym("Y")));
   putchar('\n');
 
   printf("> cons(make_int(1), cons(make_int(2), cons(make_int(3), nil)))\n");
-  Atom_print(cons(make_int(1), cons(make_int(2), cons(make_int(3), nil))));
+  atom_print(cons(make_int(1), cons(make_int(2), cons(make_int(3), nil))));
   putchar('\n');
 
   printf("> sym_table\n");
-  Atom_print(sym_table);
+  atom_print(sym_table);
   putchar('\n');
 
   repl();
