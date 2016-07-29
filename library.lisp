@@ -53,6 +53,9 @@
 (defmacro (ignore x)
   `(quote ,x))
 
+(defmacro (seq . body)
+  `((lambda (_) ,@body) nil))
+
 (defmacro (let defs . body)
   `((lambda ,(map car defs) ,@body)
     ,@(map cadr defs)))
@@ -90,3 +93,9 @@
         a
         (count-tail-aux (- n 1) (+ a 1))))
   (count-tail-aux n 0))
+
+(define (thrash n)
+  (if (= n 0)
+      nil
+      (seq (list 1 2 3 4 5 6 7 8 9 0)
+           (thrash (- n 1)))))

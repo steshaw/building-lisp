@@ -6,10 +6,16 @@
 #include <strings.h>
 #include <ctype.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <assert.h>
 
 #include <readline/readline.h>
 #include <readline/history.h>
+
+typedef struct Pair Pair;
+typedef struct Atom Atom;
+
+void atom_print(Atom atom);
 
 // -----------------------------------------------------------------------------
 // Atoms
@@ -24,9 +30,6 @@ typedef enum {
   AtomType_Closure,
   AtomType_Macro
 } AtomType;
-
-typedef struct Pair Pair;
-typedef struct Atom Atom;
 
 typedef int (*Builtin)(Atom args, Atom *result);
 
@@ -52,10 +55,26 @@ static const Atom nil = { AtomType_Nil };
 
 #define TRUE_SYM make_sym("T")
 
+typedef struct Allocation Allocation;
+
+struct Allocation {
+  Pair pair;
+  int mark : 1;
+  Allocation *next;
+};
+
+static Allocation* last_allocation = NULL;
+
 Atom cons(Atom car, Atom cdr) {
+  // Track pair allocations on global linked list `last_allocation`.
+  Allocation* a = malloc(sizeof(Allocation)); // TODO: NULL check.
+  a->mark = 0;
+  a->next = last_allocation;
+  last_allocation = a;
+
   Atom p;
   p.type = AtomType_Pair;
-  p.value.pair = malloc(sizeof(Pair)); // TODO: malloc returning NULL is unchecked
+  p.value.pair = &a->pair;
   car(p) = car;
   cdr(p) = cdr;
   return p;
@@ -121,6 +140,61 @@ int make_closure(Atom env, Atom args, Atom body, Atom *result) {
   result->type = AtomType_Closure; // Clobber AtomType_Pair with AtomType_Closure.
 
   return Result_OK;
+}
+
+// -----------------------------------------------------------------------------
+// Garbage collection.
+// -----------------------------------------------------------------------------
+
+void gc_mark(Atom root) {
+  switch (root.type) {
+    case AtomType_Pair:
+    case AtomType_Closure:
+    case AtomType_Macro: {
+      Allocation* a = (Allocation*)root.value.pair - offsetof(Allocation, pair);
+
+      if (a->mark) break;
+      a->mark = 1;
+
+      gc_mark(car(root));
+      gc_mark(cdr(root));
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+void gc(Atom expr, Atom env, Atom stack) {
+  gc_mark(expr);
+  gc_mark(env);
+  gc_mark(env);
+  gc_mark(sym_table);
+
+  // Sweep - free unmarked allocations.
+  Allocation **p = &last_allocation;
+  while (*p != NULL) {
+    Allocation* a = *p;
+    if (!a->mark) {
+      *p = a->next;
+
+      // XXX: What happens when we free the `root` pair?
+      // XXX: i.e. `last_allocation`
+      if (a == last_allocation) {
+        printf("a == last_allocation!!!\n");
+      }
+
+      free(a);
+    } else {
+      p = &a->next; // XXX: seems v.similar to *p = a->next;
+    }
+  }
+
+  // Clear marks.
+  // XXX: Couldn't we clear marks and sweep in one iteration?
+  for (Allocation* a = last_allocation; a != NULL; a = a->next) {
+    a->mark = 0;
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -587,6 +661,49 @@ INTEGER_RELOP(integer_gt_builtin, >)
 INTEGER_RELOP(integer_ge_builtin, >=)
 
 // -----------------------------------------------------------------------------
+// Stack frames.
+// -----------------------------------------------------------------------------
+
+Atom list_get(Atom list, int k) {
+  while (k--)
+    list = cdr(list);
+  return car(list);
+}
+
+void list_set(Atom list, int k, Atom value) {
+  while (k--)
+    list = cdr(list);
+  car(list) = value;
+}
+
+void list_reverse(Atom *list) {
+  Atom tail = nil;
+  while (!nilp(*list)) {
+    Atom p = cdr(*list);
+    cdr(*list) = tail;
+    tail = *list;
+    *list = p;
+  }
+  *list = tail;
+}
+
+//
+// Frames take the following form:
+//
+//   (parent env evaluated-op (pending-arg...) (evaluated-arg...) (body...))
+//
+Atom make_frame(Atom parent, Atom env, Atom tail) {
+  return cons(
+    parent,
+    cons(env,
+    cons(nil, // op
+    cons(tail,
+    cons(nil, // args
+    cons(nil, // body
+    nil))))));
+}
+
+// -----------------------------------------------------------------------------
 // Evaluation
 //   - a literal evaluates to itself.
 //   - a symbol is looked up in the environment. It's an error if no binding exists.
@@ -599,7 +716,294 @@ INTEGER_RELOP(integer_ge_builtin, >=)
 //     - (IF cond when_true when_false)
 //     - (DEFMACRO (name arg...) body...)
 // -----------------------------------------------------------------------------
+
+int eval_do_exec(Atom *stack, Atom *expr, Atom *env) {
+  *env = list_get(*stack, 1);
+  Atom body = list_get(*stack, 5);
+  *expr = car(body);
+  body = cdr(body);
+  if (nilp(body)) {
+    // Finished function - pop the stack.
+    *stack = car(*stack);
+  } else {
+    list_set(*stack, 5, body);
+  }
+
+  return Result_OK;
+}
+
+int eval_do_bind(Atom *stack, Atom *expr, Atom *env) {
+  Atom body = list_get(*stack, 5);
+  if (!nilp(body))
+    return eval_do_exec(stack, expr, env);
+
+  Atom op = list_get(*stack, 2);
+  Atom args = list_get(*stack, 4);
+
+  *env = env_create(car(op));
+  Atom arg_names = car(cdr(op));
+  body = cdr(cdr(op));
+  list_set(*stack, 1, *env);
+  list_set(*stack, 5, body);
+
+  // Bind the arguments.
+  while (!nilp(arg_names)) {
+    if (arg_names.type == AtomType_Symbol) {
+      env_set(*env, arg_names, args);
+      args = nil;
+      break;
+    }
+
+    if (nilp(args))
+      return Error_Args;
+    env_set(*env, car(arg_names), car(args));
+    arg_names = cdr(arg_names);
+    args = cdr(args);
+  }
+  if (!nilp(args))
+    return Error_Args;
+
+  list_set(*stack, 4, nil);
+
+  return eval_do_exec(stack, expr, env);
+}
+
+int eval_do_apply(Atom *stack, Atom *expr, Atom *env, Atom *result) {
+  Atom op = list_get(*stack, 2);
+  Atom args = list_get(*stack, 4);
+
+  if (!nilp(args)) {
+    list_reverse(&args);
+    list_set(*stack, 4, args);
+  }
+
+  if (op.type == AtomType_Symbol) {
+    if (strcmp(op.value.symbol, "APPLY") == 0) {
+      // Replace the current frame.
+      *stack = car(*stack);
+      *stack = make_frame(*stack, *env, nil);
+      op = car(args);
+      args = car(cdr(args));
+      if (!listp(args))
+        return Error_Syntax;
+
+      list_set(*stack, 2, op);
+      list_set(*stack, 4, args);
+    }
+  }
+
+  if (op.type == AtomType_Builtin) {
+    *stack = car(*stack);
+    *expr = cons(op, args);
+    return Result_OK;
+  } else if (op.type != AtomType_Closure) {
+    printf("Expecting closure\n");
+    return Error_Type;
+  }
+
+  return eval_do_bind(stack, expr, env);
+}
+
+int eval_do_return(Atom *stack, Atom *expr, Atom *env, Atom *result) {
+  *env = list_get(*stack, 1);
+  Atom op = list_get(*stack, 2);
+  Atom body = list_get(*stack, 5);
+
+  if (!nilp(body)) {
+    // Still running a procedure; ignore the result.
+    return eval_do_apply(stack, expr, env, result);
+  }
+
+  Atom args;
+  if (nilp(op)) {
+    // Finished evaluating operator.
+    op = *result;
+    list_set(*stack, 2, op);
+
+    if (op.type == AtomType_Macro) {
+      // Don't evaluate macro arguments.
+      args = list_get(*stack, 3);
+      *stack = make_frame(*stack, *env, nil);
+      op.type = AtomType_Closure;
+      list_set(*stack, 2, op);
+      list_set(*stack, 4, args);
+      return eval_do_bind(stack, expr, env);
+    }
+  } else if (op.type == AtomType_Symbol) {
+    // Finished working on special form.
+    if (strcmp(op.value.symbol, "DEFINE") == 0) {
+      Atom sym = list_get(*stack, 4);
+      (void) env_set(*env, sym, *result);
+      *stack = car(*stack);
+      *expr = cons(make_sym("QUOTE"), cons(sym, nil));
+      return Result_OK;
+    } else if (strcmp(op.value.symbol, "IF") == 0) {
+      args = list_get(*stack, 3);
+      *expr = nilp(*result) ? car(cdr(args)) : car(args);
+      *stack = car(*stack);
+      return Result_OK;
+    } else {
+      goto store_arg;
+    }
+  } else if (op.type == AtomType_Macro) {
+    // Finished evaluating macro.
+    *expr = *result;
+    *stack = car(*stack);
+    return Result_OK;
+  } else {
+store_arg:
+    // Store evaluated argument.
+    args = list_get(*stack, 4);
+    list_set(*stack, 4, cons(*result, args));
+  }
+
+  args = list_get(*stack, 3);
+  if (nilp(args)) {
+    // No more arguments left to evaluate.
+    return eval_do_apply(stack, expr, env, result);
+  }
+
+  // Evaluate next argument.
+  *expr = car(args);
+  list_set(*stack, 3, cdr(args));
+  return Result_OK;
+}
+
 Result eval_expr(Atom expr, Atom env, Atom *result) {
+  static int count = 0;
+  Result err = Result_OK;
+  Atom stack = nil;
+
+  do {
+    if (++count == 10000) {
+      gc(expr, env, stack);
+      count = 0;
+    }
+    if (expr.type == AtomType_Symbol) {
+      err = env_get(env, expr, result);
+    } else if (expr.type != AtomType_Pair) {
+      *result = expr;
+    } else if (!listp(expr)) {
+      return Error_Syntax;
+    } else {
+      Atom op = car(expr);
+      Atom args = cdr(expr);
+
+      if (op.type == AtomType_Symbol) {
+        // Handle special forms.
+        if (strcmp(op.value.symbol, "GC") == 0) {
+          ENSURE_0_ARGS();
+          gc(expr, env, stack);
+          *result = TRUE_SYM;
+          return Result_OK;
+        } else if (strcmp(op.value.symbol, "QUOTE") == 0) {
+          if (nilp(args) || !nilp(cdr(args)))
+            return Error_Args;
+
+          *result = car(args);
+        } else if (strcmp(op.value.symbol, "DEFINE") == 0) {
+          Atom sym;
+
+          if (nilp(args) || nilp(cdr(args)))
+            return Error_Args;
+
+          sym = car(args);
+          if (sym.type == AtomType_Pair) {
+            err = make_closure(env, cdr(sym), cdr(args), result);
+            sym = car(sym);
+            if (sym.type != AtomType_Symbol) {
+              printf("DEFINE expecting symbol\n");
+              return Error_Type;
+            }
+            (void) env_set(env, sym, *result);
+            *result = sym;
+          } else if (sym.type == AtomType_Symbol) {
+            if (!nilp(cdr(cdr(args))))
+              return Error_Args;
+            stack = make_frame(stack, env, nil);
+            list_set(stack, 2, op);
+            list_set(stack, 4, sym);
+            expr = car(cdr(args));
+            continue;
+          } else {
+            printf("Invalid type for DEFINE\n");
+            return Error_Type;
+          }
+        } else if (strcmp(op.value.symbol, "LAMBDA") == 0) {
+          if (nilp(args) || nilp(cdr(args)))
+            return Error_Args;
+
+          err = make_closure(env, car(args), cdr(args), result);
+        } else if (strcmp(op.value.symbol, "IF") == 0) {
+          if (nilp(args) || nilp(cdr(args)) || nilp(cdr(cdr(args))) || 
+              !nilp(cdr(cdr(cdr(args)))))
+            return Error_Args;
+
+          stack = make_frame(stack, env, cdr(args));
+          list_set(stack, 2, op);
+          expr = car(args);
+          continue;
+        } else if (strcmp(op.value.symbol, "DEFMACRO") == 0) {
+          Atom name, macro;
+
+          if (nilp(args) || nilp(cdr(args)))
+            return Error_Args;
+
+          if (car(args).type != AtomType_Pair)
+            return Error_Syntax;
+
+          name = car(car(args));
+          if (name.type != AtomType_Symbol) {
+            printf("DEFMACRO expecting symbol\n");
+            return Error_Type;
+          }
+
+          err = make_closure(env, cdr(car(args)), cdr(args), &macro);
+          if (!err) {
+            macro.type = AtomType_Macro;
+            *result = name;
+            (void) env_set(env, name, macro);
+          }
+        } else if (strcmp(op.value.symbol, "APPLY") == 0) {
+          if (nilp(args) || nilp(cdr(args)) || !nilp(cdr(cdr(args))))
+            return Error_Args;
+
+          stack = make_frame(stack, env, cdr(args));
+          list_set(stack, 2, op);
+          expr = car(args);
+          continue;
+        } else {
+          goto push;
+        }
+      } else if (op.type == AtomType_Builtin) {
+        err = (*op.value.builtin)(args, result);
+      } else {
+      push:
+        // Handle function application.
+        stack = make_frame(stack, env, args);
+        expr = op;
+        continue;
+      }
+    }
+
+    if (nilp(stack))
+      break;
+
+    if (!err)
+      err = eval_do_return(&stack, &expr, &env, result);
+  } while (!err);
+
+  return err;
+}
+
+Result eval_expr_old(Atom expr, Atom env, Atom *result) {
+  static int count = 0;
+
+  if (++count == 10000) {
+    gc(expr, env, nil); // XXX: no stack to supply...
+    count = 0;
+  }
+
   if (expr.type == AtomType_Symbol) {
     return env_get(env, expr, result);
   } else if (expr.type != AtomType_Pair) {
@@ -614,7 +1018,11 @@ Result eval_expr(Atom expr, Atom env, Atom *result) {
   Atom args = cdr(expr);
 
   if (op.type == AtomType_Symbol) {
-    if (strcmp(op.value.symbol, "QUOTE") == 0) {
+    if (strcmp(op.value.symbol, "GC") == 0) {
+      ENSURE_0_ARGS();
+      gc(expr, env, nil); // XXX: no stack to supply
+      return Result_OK;
+    } else if (strcmp(op.value.symbol, "QUOTE") == 0) {
       if (nilp(args) || !nilp(cdr(args)))
         return Error_Args;
 
@@ -832,10 +1240,11 @@ char* slurp(const char path[]) {
   long len = ftell(file);
   fseek(file, 0, SEEK_SET);
 
-  char * buf = malloc(len); // XXX: +1?
+  char* buf = malloc(len + 1);
   if (buf == NULL) return NULL;
 
   fread(buf, 1, len, file);
+  buf[len] = '\0';
   fclose(file);
 
   return buf;
