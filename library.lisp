@@ -78,3 +78,15 @@
       (if (cdr xs)
           (reduce old/ xs)
           (old/ 1 (car xs))))))
+
+(define (count n)
+  (if (= n 0)
+      0
+      (+ 1 (count (- n 1)))))
+
+(define (count-tail n)
+  (define (count-tail-aux n a)
+    (if (= n 0)
+        a
+        (count-tail-aux (- n 1) (+ a 1))))
+  (count-tail-aux n 0))
