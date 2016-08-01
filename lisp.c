@@ -268,6 +268,13 @@ Result lex(const char str[], const char **start, const char **end) {
   } else if (str[0] == ',') {
     // Regcognise both unquote "," and unquote-splicing ",@".
     *end = str + (str[1] == '@'? 2 : 1);
+  } else if (str[0] == ';') {
+    str = strchr(str, '\n');
+    if (str != NULL) {
+      return lex(str, start, end);
+    } else {
+      return Result_OK;
+    }
   } else {
     *end = str + strcspn(str, delim); // Recognise "other" token.
   }

@@ -1,4 +1,6 @@
-(define (abs x) (if (< x 0) (- 0 x) x))
+;;
+;; List functions
+;;
 
 (define (foldl proc init list)
   (if list
@@ -37,6 +39,9 @@
 (define (caar x) (car (car x)))
 (define (cadr x) (car (cdr x)))
 
+;;
+;; Quasiquote
+;;
 (defmacro (quasiquote x)
   (if (pair? x)
       (if (eq? (car x) 'unquote)
@@ -50,37 +55,51 @@
                     (list 'quasiquote (cdr x)))))
       (list 'quote x)))
 
+;;
+;; Macros
+;;
+
 (defmacro (ignore x)
   `(quote ,x))
 
-(defmacro (seq . body)
-  `((lambda (_) ,@body) nil))
+(defmacro (begin . body)
+  `((lambda () ,@body)))
 
 (defmacro (let defs . body)
   `((lambda ,(map car defs) ,@body)
     ,@(map cadr defs)))
 
+;;
+;; Integer functions
+;;
+
 (define +
   (let ((old+ +))
     (lambda xs (foldl old+ 0 xs))))
+
+(define -
+  (let ((old- -))
+    (lambda (x . xs)
+      (if xs
+        (foldl old- x xs)
+        (old- 0 x)))))
 
 (define *
   (let ((old* *))
     (lambda xs (foldl old* 1 xs))))
 
-(define -
-  (let ((old- -))
-    (lambda xs
-      (if (cdr xs)
-        (reduce old- xs)
-        (old- 0 (car xs))))))
-
 (define /
   (let ((old/ /))
-    (lambda xs
-      (if (cdr xs)
-          (reduce old/ xs)
-          (old/ 1 (car xs))))))
+    (lambda (x . xs)
+      (if xs
+          (foldl old/ x xs)
+          (old/ 1 x)))))
+
+(define (abs x) (if (< x 0) (- 0 x) x))
+
+;;
+;; functions to help thrash the GC.
+;;
 
 (define (count n)
   (if (= n 0)
@@ -97,5 +116,5 @@
 (define (thrash n)
   (if (= n 0)
       nil
-      (seq (list 1 2 3 4 5 6 7 8 9 0)
-           (thrash (- n 1)))))
+      (begin (list 1 2 3 4 5 6 7 8 9 0)
+             (thrash (- n 1)))))
