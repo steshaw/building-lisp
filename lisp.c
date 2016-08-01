@@ -168,7 +168,7 @@ void gc_mark(Atom root) {
 void gc(Atom expr, Atom env, Atom stack) {
   gc_mark(expr);
   gc_mark(env);
-  gc_mark(env);
+  gc_mark(stack);
   gc_mark(sym_table);
 
   // Sweep - free unmarked allocations.
