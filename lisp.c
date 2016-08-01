@@ -1009,7 +1009,7 @@ static Atom generator_env;
 
 // GNU readline function for tab completion.
 // Looks for symbols in the current environment.
-char *symbol_generator(const char* text, int state) {
+char* symbol_generator(const char* text, int state) {
   static Atom parent;
   static Atom bindings; // Note the statics.
   static int len;
@@ -1159,6 +1159,7 @@ void load_file(Atom env, const char path[]) {
         putchar('\n');
       }
     }
+    free(text);
   }
 }
 
