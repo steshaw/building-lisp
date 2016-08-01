@@ -97,6 +97,8 @@
 
 (define (abs x) (if (< x 0) (- 0 x) x))
 
+(define (fact n) (if (= n 0) 1 (* n (fact (- n 1)))))
+
 ;;
 ;; functions to help thrash the GC.
 ;;

@@ -904,18 +904,14 @@ Result eval_expr(Atom expr, Atom env, Atom *result) {
           *result = TRUE_SYM;
           return Result_OK;
         } else if (strcmp(op.value.symbol, "QUOTE") == 0) {
-          if (nilp(args) || !nilp(cdr(args)))
-            return Error_Args;
-
+          ENSURE_1_ARG();
           *result = car(args);
         } else if (strcmp(op.value.symbol, "DEFINE") == 0) {
-          Atom sym;
+          if (nilp(args) || nilp(cdr(args))) return Error_Args; // At least two args.
 
-          if (nilp(args) || nilp(cdr(args)))
-            return Error_Args;
-
-          sym = car(args);
+          Atom sym = car(args);
           if (sym.type == AtomType_Pair) {
+            // (DEFINE (name args...) body...)
             err = make_closure(env, cdr(sym), cdr(args), result);
             sym = car(sym);
             if (sym.type != AtomType_Symbol) {
@@ -925,8 +921,8 @@ Result eval_expr(Atom expr, Atom env, Atom *result) {
             (void) env_set(env, sym, *result);
             *result = sym;
           } else if (sym.type == AtomType_Symbol) {
-            if (!nilp(cdr(cdr(args))))
-              return Error_Args;
+            // (DEFINE sym expr)
+            ENSURE_2_ARGS();
             stack = make_frame(stack, env, nil);
             list_set(stack, 2, op);
             list_set(stack, 4, sym);
@@ -937,37 +933,35 @@ Result eval_expr(Atom expr, Atom env, Atom *result) {
             return Error_Type;
           }
         } else if (strcmp(op.value.symbol, "LAMBDA") == 0) {
-          if (nilp(args) || nilp(cdr(args)))
-            return Error_Args;
-
+          if (nilp(args) || nilp(cdr(args))) return Error_Args;
           err = make_closure(env, car(args), cdr(args), result);
         } else if (strcmp(op.value.symbol, "IF") == 0) {
-          if (nilp(args) || nilp(cdr(args)) || nilp(cdr(cdr(args))) || 
-              !nilp(cdr(cdr(cdr(args)))))
-            return Error_Args;
+          ENSURE_3_ARGS();
 
           stack = make_frame(stack, env, cdr(args));
           list_set(stack, 2, op);
           expr = car(args);
           continue;
         } else if (strcmp(op.value.symbol, "DEFMACRO") == 0) {
-          Atom name, macro;
 
           if (nilp(args) || nilp(cdr(args)))
             return Error_Args;
 
-          if (car(args).type != AtomType_Pair)
+          if (car(args).type != AtomType_Pair) {
+            printf("Expecting symbol in DEFMACRO\n");
             return Error_Syntax;
+          }
 
-          name = car(car(args));
+          Atom name = car(car(args));
           if (name.type != AtomType_Symbol) {
             printf("DEFMACRO expecting symbol\n");
             return Error_Type;
           }
 
+          Atom macro;
           err = make_closure(env, cdr(car(args)), cdr(args), &macro);
           if (!err) {
-            macro.type = AtomType_Macro;
+            macro.type = AtomType_Macro; // Clobber AtomType_Closure.
             *result = name;
             (void) env_set(env, name, macro);
           }
@@ -1001,124 +995,6 @@ Result eval_expr(Atom expr, Atom env, Atom *result) {
   } while (!err);
 
   return err;
-}
-
-Result eval_expr_old(Atom expr, Atom env, Atom *result) {
-  static int count = 0;
-
-  if (++count == 10000) {
-    gc(expr, env, nil); // XXX: no stack to supply...
-    count = 0;
-  }
-
-  if (expr.type == AtomType_Symbol) {
-    return env_get(env, expr, result);
-  } else if (expr.type != AtomType_Pair) {
-    *result = expr;
-    return Result_OK;
-  }
-
-  if (!listp(expr))
-    return Error_Syntax;
-
-  Atom op = car(expr);
-  Atom args = cdr(expr);
-
-  if (op.type == AtomType_Symbol) {
-    if (strcmp(op.value.symbol, "GC") == 0) {
-      ENSURE_0_ARGS();
-      gc(expr, env, nil); // XXX: no stack to supply
-      return Result_OK;
-    } else if (strcmp(op.value.symbol, "QUOTE") == 0) {
-      if (nilp(args) || !nilp(cdr(args)))
-        return Error_Args;
-
-      *result = car(args);
-      return Result_OK;
-    } else if (strcmp(op.value.symbol, "DEFINE") == 0) {
-      if (nilp(args) || nilp(cdr(args))) return Error_Args; // At least two args.
-
-      Atom sym;
-      Atom val;
-      Atom first = car(args);
-      if (first.type == AtomType_Symbol) {
-        // (DEFINE sym expr)
-        ENSURE_2_ARGS();
-        sym = first;
-        Atom expr = car(cdr(args));
-        Result r = eval_expr(expr, env, &val);
-        if (r) return r;
-      } else if (first.type == AtomType_Pair) {
-        // (DEFINE (name args...) body...)
-        sym = car(first);
-        if (sym.type != AtomType_Symbol) {
-          printf("Expecting symbol in (DEFINE (name args...) body...)\n");
-          return Error_Type;
-        }
-        Result r = make_closure(env, cdr(first), cdr(args), &val);
-        if (r) return r;
-      } else {
-          printf("Expecting symbol or pair in (DEFINE ...)\n");
-        return Error_Type;
-      }
-
-      *result = sym;
-      return env_set(env, sym, val);
-    } else if (strcmp(op.value.symbol, "LAMBDA") == 0) {
-      if (nilp(args) || nilp(cdr(args))) return Error_Args;
-      return make_closure(env, car(args), cdr(args), result);
-    } else if (strcmp(op.value.symbol, "IF") == 0) {
-      ENSURE_3_ARGS();
-
-      Atom cond = car(args);
-      Atom when_t = car(cdr(args));
-      Atom when_f = car(cdr(cdr(args)));
-
-      Result r = eval_expr(cond, env, &cond);
-      if (r) return r;
-      Atom e = nilp(cond) ? when_f : when_t; // NIL is falsy, all other values of truthy.
-      return eval_expr(e, env, result);
-    } else if (strcmp(op.value.symbol, "DEFMACRO") == 0) {
-      if (nilp(args) || nilp(cdr(args))) return Error_Args;
-      if (car(args).type != AtomType_Pair) return Error_Syntax;
-      Atom sym = car(car(args));
-      if (sym.type != AtomType_Symbol) {
-        printf("Expecting symbol in DEFMACRO\n");
-        return Error_Type;
-      }
-      Atom macro;
-      Result r = make_closure(env, cdr(car(args)), cdr(args), &macro);
-      if (r) return r;
-      macro.type = AtomType_Macro; // Clobber AtomType_Closure.
-      *result = sym;
-      return env_set(env, sym, macro);
-    }
-  }
-
-  // Evaluate the operator.
-  Result r = eval_expr(op, env, &op);
-  if (r) return r;
-
-  // Is it a macro?
-  if (op.type == AtomType_Macro) {
-    op.type = AtomType_Closure; // Sneakily turn the macro into a closure again.
-    Atom expansion;
-    Result r = apply(op, args, &expansion);
-    if (r) return r;
-    return eval_expr(expansion, env, result);
-  } else {
-    // It must be a function application.
-
-    // Evaluate arguments.
-    args = copy_list(args); // Shallow copy because we clobber the args with the
-                            // evaluated args.
-    for (Atom p = args; !nilp(p); p = cdr(p)) {
-      r = eval_expr(car(p), env, &car(p));
-      if (r) return r;
-    }
-
-    return apply(op, args, result);
-  }
 }
 
 // -----------------------------------------------------------------------------
