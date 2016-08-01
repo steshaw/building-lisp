@@ -257,8 +257,8 @@ Result lex(const char str[], const char **start, const char **end) {
 
   str += strspn(str, ws);
   if (str[0] == '\0') {
-    *start = *end = NULL;
-    return Error_Syntax;
+    *start = *end = str;
+    return Result_OK;
   }
 
   *start = str;
@@ -269,10 +269,12 @@ Result lex(const char str[], const char **start, const char **end) {
     // Regcognise both unquote "," and unquote-splicing ",@".
     *end = str + (str[1] == '@'? 2 : 1);
   } else if (str[0] == ';') {
-    str = strchr(str, '\n');
-    if (str != NULL) {
-      return lex(str, start, end);
+    const char *s = strchr(str, '\n');
+    if (s != NULL) {
+      return lex(s, start, end);
     } else {
+      str = strchr(str, '\0');
+      *start = *end = str;
       return Result_OK;
     }
   } else {
@@ -368,7 +370,9 @@ int read_expr(const char *input, const char **end, Atom *result) {
   Result r = lex(input, &token, end);
   if (r) return r;
 
-  if (token[0] == '(')
+  if (token[0] == '\0')
+    return Error_Syntax;
+  else if (token[0] == '(')
     return read_list(*end, end, result);
   else if (token[0] == ')')
     return Error_Syntax;
@@ -1038,41 +1042,45 @@ void repl(Atom env) {
   rl_completion_entry_function = symbol_generator;
   char *input;
   while ((input = readline("λ> ")) != NULL) {
-    if (strlen(input) != 0) {
-      add_history(input);
-      write_history(history_file);
 
-      if (strcmp(input, ":q") == 0) {
-        puts("bye");
-        free(input);
+    // Continue if all ws (or comments).
+    const char* start;
+    const char* end;
+    if (lex(input, &start, &end) == Result_OK && *start == '\0') continue;
+
+    add_history(input);
+    write_history(history_file);
+
+    if (strcmp(input, ":q") == 0) {
+      puts("bye");
+      free(input);
+      break;
+    }
+
+    const char* p = input;
+    Atom expr;
+    Result r = read_expr(p, &p, &expr);
+
+    Atom result;
+    if (!r) r = eval_expr(expr, env, &result);
+
+    switch (r) {
+      case Result_OK:
+        atom_print(result);
+        putchar('\n');
         break;
-      }
-
-      const char* p = input;
-      Atom expr;
-      Result r = read_expr(p, &p, &expr);
-
-      Atom result;
-      if (!r) r = eval_expr(expr, env, &result);
-
-      switch (r) {
-        case Result_OK:
-          atom_print(result);
-          putchar('\n');
-          break;
-        case Error_Syntax:
-          puts("Syntax error");
-          break;
-        case Error_Unbound:
-          puts("Symbol not bound");
-          break;
-        case Error_Args:
-          puts("Wrong number of arguments");
-          break;
-        case Error_Type:
-          puts("Wrong type");
-          break;
-      }
+      case Error_Syntax:
+        puts("Syntax error");
+        break;
+      case Error_Unbound:
+        puts("Symbol not bound");
+        break;
+      case Error_Args:
+        puts("Wrong number of arguments");
+        break;
+      case Error_Type:
+        puts("Wrong type");
+        break;
     }
     free(input);
   }
