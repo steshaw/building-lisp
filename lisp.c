@@ -998,6 +998,8 @@ Result eval_expr(Atom expr, Atom env, Atom *result) {
       err = eval_do_return(&stack, &expr, &env, result);
   } while (!err);
 
+  gc(expr, env, stack);
+
   return err;
 }
 
